@@ -49,6 +49,16 @@ def parse_tcpdump_line(line):
     length_match = re.search(r"length\s(\d+)", line)
     if length_match:
         result["Length"] = length_match.group(1)
+    
+    # Numéro de séquence
+    seq_match = re.search(r"seq\s(\d+)", line)
+    if seq_match:
+        result["Seq"] = int(seq_match.group(1))
+
+    # Numéro d'acquittement
+    ack_match = re.search(r"ack\s(\d+)", line)
+    if ack_match:
+        result["Ack"] = int(ack_match.group(1))
 
     return result
 
@@ -98,6 +108,8 @@ else:
                 event = parse_tcpdump_line(ligne)
                 if event:
                     liste_event.append(event)
+    # --- Détection d'incohérences TCP ---
+    flux_state = {}  # (src, dst, sport, dport) -> dernier seq/ack
 
     # --- Export CSV ---
     if liste_event:
