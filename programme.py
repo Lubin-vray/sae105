@@ -7,6 +7,23 @@ from collections import Counter, defaultdict
 
 chemin_fichier = ""
 liste_event = []
+def detect_sql_injection(line):
+    # Patterns SQLi classiques
+    patterns = [
+        r"' OR 1=1", r"\" OR 1=1",
+        r"UNION SELECT", r"UNION ALL SELECT",
+        r"information_schema", r"table_schema",
+        r"sleep\(", r"benchmark\(",
+        r"extractvalue", r"updatexml",
+        r"or 'a'='a", r"or 1=1 --",
+        r"DROP TABLE", r"INSERT INTO", r"DELETE FROM",
+        r"sqlmap", r"python-requests"
+    ]
+
+    for p in patterns:
+        if re.search(p, line, re.IGNORECASE):
+            return True
+    return False
 
 def parse_tcpdump_line(line):
     result = {}
@@ -59,6 +76,12 @@ def parse_tcpdump_line(line):
     ack_match = re.search(r"ack\s(\d+)", line)
     if ack_match:
         result["Ack"] = int(ack_match.group(1))
+     # Détection SQL Injection dans le payload
+    if detect_sql_injection(line):
+        result["SQLi"] = "YES"
+    else:
+        result["SQLi"] = "NO"
+
 
     return result
 
@@ -171,110 +194,306 @@ if liste_event:
         plt.xlabel("Source IP")
         plt.ylabel("Nombre de SYN")
         plt.xticks(rotation=45)
+        plt.tight_layout()
         plt.savefig("flags_by_src.png")
         plt.close()
 
-    # 3. Flags S en fonction du temps (top 5)
-    syn_by_time = Counter(ev.get("Timestamp") for ev in liste_event if ev.get("Flags") and "S" in ev["Flags"])
-    if syn_by_time:
-        top5_time = syn_by_time.most_common(5)  # top 5
-        times, counts = zip(*top5_time)
-        plt.figure(figsize=(8,5))
-        plt.bar(times, counts, color="green")
-        plt.title("Top 5 pics d'activité SYN")
-        plt.xlabel("Timestamp")
-        plt.ylabel("Nombre de SYN")
-        plt.xticks(rotation=45)
-        plt.savefig("flags_time.png")
-        plt.close()
+           # 3. Évolution des Flags S dans le temps pour la Source IP la plus active (diagramme bâton)
+    syn_by_src = Counter(
+        ev.get("Source IP") for ev in liste_event
+        if ev.get("Flags") and "S" in ev["Flags"] and ev.get("Source IP")
+    )
 
-       # 4. Top 5 Sources IP en requêtes DNS
-    dns_sources = Counter(ev.get("Source IP") for ev in liste_event if ev.get("Protocol") == "DNS")
-    if dns_sources:
-        top5_dns = dns_sources.most_common(5)
-        ips, counts = zip(*top5_dns)
-        plt.figure(figsize=(8,5))
-        plt.bar(ips, counts, color="purple")
-        plt.title("Top 5 Sources IP en requêtes DNS")
-        plt.xlabel("Source IP")
-        plt.ylabel("Nombre de requêtes DNS")
-        plt.xticks(rotation=45)
-        plt.savefig("dns_attack.png")
+    if syn_by_src:
+        top_src_ip, _ = syn_by_src.most_common(1)[0]
+
+        syn_time_top_src = Counter(
+            ev.get("Timestamp") for ev in liste_event
+            if ev.get("Flags") and "S" in ev["Flags"]
+            and ev.get("Source IP") == top_src_ip
+            and ev.get("Timestamp")
+        )
+
+        if syn_time_top_src:
+            times = sorted(syn_time_top_src.keys())
+            counts = [syn_time_top_src[t] for t in times]
+
+            plt.figure(figsize=(8, 5))
+            plt.bar(times, counts, color="green")
+            plt.title(f"Évolution des SYN dans le temps pour {top_src_ip}")
+            plt.xlabel("Timestamp")
+            plt.ylabel("Nombre de SYN")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig("flags_time_top_src.png")
+            plt.close()
+        # Camembert : répartition des paquets SYN par port de destination
+    # pour l'adresse source qui en envoie le plus
+
+    # 1) Source IP avec le plus de SYN
+    syn_by_src = Counter(
+        ev.get("Source IP") for ev in liste_event
+        if ev.get("Flags") and "S" in ev["Flags"] and ev.get("Source IP")
+    )
+
+    if syn_by_src:
+        top_src_ip, _ = syn_by_src.most_common(1)[0]
+
+        # 2) Nombre de SYN par port de destination pour cette IP
+        syn_by_dport = Counter(
+            ev.get("Destination Port") for ev in liste_event
+            if ev.get("Flags") and "S" in ev["Flags"]
+            and ev.get("Source IP") == top_src_ip
+            and ev.get("Destination Port")
+        )
+
+        if syn_by_dport:
+            labels = list(syn_by_dport.keys())
+            sizes = list(syn_by_dport.values())
+
+            plt.figure(figsize=(7, 7))
+            plt.pie(
+                sizes,
+                labels=labels,
+                autopct='%1.1f%%',
+                startangle=90
+            )
+            plt.title(f"Part des paquets SYN par port pour {top_src_ip}")
+            plt.tight_layout()
+            plt.savefig("syn_ports_top_src.png")
+            plt.close()
+
+
+    # ============================
+    # 7. Détection DDoS TCP (SYN / ACK / RST)
+    # ============================
+    syn_by_dst = Counter(ev.get("Destination IP") for ev in liste_event if ev.get("Flags") and "S" in ev["Flags"])
+    ack_by_dst = Counter(ev.get("Destination IP") for ev in liste_event if ev.get("Flags") == ".")
+    rst_by_dst = Counter(ev.get("Destination IP") for ev in liste_event if ev.get("Flags") and "R" in ev["Flags"])
+
+    top_ddos = syn_by_dst.most_common(5)
+    if top_ddos:
+        dst_ips = [ip for ip, _ in top_ddos]
+        syn_counts = [syn_by_dst[ip] for ip in dst_ips]
+        ack_counts = [ack_by_dst.get(ip, 0) for ip in dst_ips]
+        rst_counts = [rst_by_dst.get(ip, 0) for ip in dst_ips]
+
+        x = range(len(dst_ips))
+        plt.figure(figsize=(9,5))
+        plt.bar(x, syn_counts, width=0.3, label="SYN", color="red")
+        plt.bar([i+0.3 for i in x], ack_counts, width=0.3, label="ACK", color="blue")
+        plt.bar([i+0.6 for i in x], rst_counts, width=0.3, label="RST", color="purple")
+        plt.xticks([i+0.3 for i in x], dst_ips, rotation=45)
+        plt.title("Potentiel attaque DDoS TCP (SYN / ACK / RST)")
+        plt.xlabel("Destination IP")
+        plt.ylabel("Nombre de paquets")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig("ddos_tcp.png")
         plt.close()
     else:
         plt.figure(figsize=(6,5))
-        plt.bar(["Aucun DNS"], [0], color="grey")
-        plt.title("Top 5 Sources IP en requêtes DNS")
-        plt.savefig("dns_attack.png")
+        plt.bar(["Aucune donnée"], [0], color="grey")
+        plt.title("Potentiel DDoS TCP")
+        plt.savefig("ddos_tcp.png")
         plt.close()
 
-    # 5. Histogramme des longueurs DNS
-    dns_lengths = [int(ev.get("Length", 0)) for ev in liste_event if ev.get("Protocol") == "DNS" and ev.get("Length")]
-    if dns_lengths:
-        plt.figure(figsize=(8,5))
-        plt.hist(dns_lengths, bins=20, color="orange", edgecolor="black")
-        plt.title("Distribution des longueurs de paquets DNS")
-        plt.xlabel("Longueur")
-        plt.ylabel("Nombre de paquets DNS")
-        plt.savefig("dns_lengths.png")
+        # 8bis. Détail du scan de ports pour la Source IP qui scanne le plus
+
+    ports_by_src = defaultdict(set)
+    for ev in liste_event:
+        src = ev.get("Source IP")
+        dport = ev.get("Destination Port")
+        if src and dport:
+            ports_by_src[src].add(dport)
+
+    if ports_by_src:
+        # 1) Source IP qui a le plus de ports distincts
+        scan_scores = {src: len(ports) for src, ports in ports_by_src.items()}
+        top_src_scan, _ = sorted(scan_scores.items(),
+                                 key=lambda x: x[1],
+                                 reverse=True)[0]
+
+        # 2) Compter le nombre de paquets par port pour cette source
+        ports_count = Counter(
+            ev.get("Destination Port") for ev in liste_event
+            if ev.get("Source IP") == top_src_scan
+            and ev.get("Destination Port")
+        )
+
+        if ports_count:
+            ports = list(ports_count.keys())
+            counts = list(ports_count.values())
+
+            plt.figure(figsize=(9, 5))
+            plt.bar(ports, counts, color="orange")
+            plt.title(f"Détail du scan de ports pour {top_src_scan}")
+            plt.xlabel("Port de destination")
+            plt.ylabel("Nombre de paquets")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig("port_scan_top_src.png")
+            plt.close()
+    else:
+        plt.figure(figsize=(6, 5))
+        plt.bar(["Aucun scan"], [0], color="grey")
+        plt.title("Aucun scan détecté")
+        plt.savefig("port_scan_top_src.png")
+        plt.close()
+
+
+    # ============================
+    # 9. Détection SQL Injection
+    # ============================
+    sqli_count = Counter(ev.get("SQLi", "NO") for ev in liste_event)
+    plt.figure(figsize=(6,6))
+    plt.pie(sqli_count.values(), labels=sqli_count.keys(), autopct='%1.1f%%')
+    plt.title("Potentiel SQL Injection")
+    plt.savefig("sqli.png")
+    plt.close()
+
+    # ============================
+    # 10. Détection Brute-force (RST répétés)
+    # ============================
+    brute_force_counter = Counter()
+    for ev in liste_event:
+        if ev.get("Flags") and "R" in ev["Flags"]:
+            src = ev.get("Source IP")
+            dst = ev.get("Destination IP")
+            dport = ev.get("Destination Port")
+            if src and dst and dport:
+                brute_force_counter[f"{src} -> {dst}:{dport}"] += 1
+
+    if brute_force_counter:
+        top_bruteforce = brute_force_counter.most_common(5)
+        flows, counts = zip(*top_bruteforce)
+        plt.figure(figsize=(10,5))
+        plt.bar(flows, counts, color="crimson")
+        plt.title("Potentiel Brute-force (RST répétés)")
+        plt.xlabel("Flux (Source -> Destination:Port)")
+        plt.ylabel("Nombre de RST")
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        plt.savefig("bruteforce.png")
         plt.close()
     else:
         plt.figure(figsize=(6,5))
-        plt.bar(["Aucun DNS"], [0], color="grey")
-        plt.title("Distribution des longueurs de paquets DNS")
-        plt.savefig("dns_lengths.png")
+        plt.bar(["Aucun brute-force"], [0], color="grey")
+        plt.title("Potentiel Brute-force")
+        plt.savefig("bruteforce.png")
         plt.close()
+        # Répartition de la longueur des paquets pour la Source IP la plus active (SYN)
 
-    # 6. DNS par timestamp (top 5)
-    dns_time = Counter(ev.get("Timestamp") for ev in liste_event if ev.get("Protocol") == "DNS")
-    if dns_time:
-        top5_time = dns_time.most_common(5)
-        times, counts = zip(*top5_time)
-        plt.figure(figsize=(8,5))
-        plt.bar(times, counts, color="cyan")
-        plt.title("Top 5 pics d'activité DNS")
-        plt.xlabel("Timestamp")
-        plt.ylabel("Nombre de requêtes DNS")
-        plt.xticks(rotation=45)
-        plt.savefig("dns_time.png")
-        plt.close()
-    else:
-        plt.figure(figsize=(6,5))
-        plt.bar(["Aucun DNS"], [0], color="grey")
-        plt.title("Top 5 pics d'activité DNS")
-        plt.savefig("dns_time.png")
-        plt.close()
+    # 1) Source IP avec le plus de paquets SYN
+    syn_by_src = Counter(
+        ev.get("Source IP") for ev in liste_event
+        if ev.get("Flags") and "S" in ev["Flags"] and ev.get("Source IP")
+    )
+
+    if syn_by_src:
+        top_src_ip, _ = syn_by_src.most_common(1)[0]
+
+        # 2) Récupérer les longueurs des paquets envoyés par cette source (tu peux choisir
+        #    soit seulement les SYN, soit tous les paquets ; ici seulement les SYN)
+        lengths = [
+            int(ev["Length"]) for ev in liste_event
+            if ev.get("Source IP") == top_src_ip
+            and ev.get("Flags") and "S" in ev["Flags"]
+            and ev.get("Length")
+        ]
+
+        if lengths:
+            plt.figure(figsize=(8, 5))
+            plt.hist(lengths, bins=20, edgecolor="black", color="skyblue")
+            plt.title(f"Répartition de la longueur des paquets SYN pour {top_src_ip}")
+            plt.xlabel("Longueur du paquet (octets)")
+            plt.ylabel("Nombre de paquets")
+            plt.tight_layout()
+            plt.savefig("lengths_top_src.png")
+            plt.close()
+
     html_content = """
     <html>
-    <head><title>Analyse Tcpdump</title></head>
+    <head>
+        <meta charset="UTF-8">
+        <title>Analyse Tcpdump</title>
+        <link href="https://bootswatch.com/5/journal/bootstrap.min.css" rel="stylesheet">
+    </head>
+
     <body>
-        <h1>Analyse Tcpdump</h1>
-        <h2>Répartition des Protocoles</h2>
-        <img src="protocols.png" alt="Protocol Pie Chart"><br>
 
-        <h2>Distribution des longueurs de paquets</h2>
-        <img src="lengths.png" alt="Packet Length Histogram"><br>
+    <div class="container my-5">
 
-        <h2>Top 10 Ports Sources</h2>
-        <img src="ports.png" alt="Top Ports Bar Chart"><br>
+        <h1 class="text-center mb-5">Analyse Tcpdump</h1>
 
-        <h2>Flags SYN vs autres</h2>
-        <img src="flags.png" alt="Flags SYN vs autres"><br>
+        <!-- Fonction utilitaire pour chaque section -->
+        <div class="text-center my-4">
+            <h2>Répartition des Protocoles</h2>
+            <img src="protocols.png" class="img-fluid rounded" alt="Protocol Pie Chart">
+        </div>
+        
 
-        <h2>Flags SYN par Source IP</h2>
-        <img src="flags_by_src.png" alt="Flags SYN par Source"><br>
+        <div class="text-center my-4">
+            <h2>Distribution des longueurs de paquets</h2>
+            <img src="lengths.png" class="img-fluid rounded" alt="Packet Length Histogram">
+        </div>
 
-        <h2>Évolution des Flags SYN dans le temps</h2>
-        <img src="flags_time.png" alt="Flags SYN dans le temps"><br>
+        <div class="text-center my-4">
+            <h2>Top 10 Ports Sources</h2>
+            <img src="ports.png" class="img-fluid rounded" alt="Top Ports Bar Chart">
+        </div>
 
-        <h2>Top 5 Sources IP en requêtes DNS</h2>
-        <img src="dns_attack.png" alt="DNS Sources"><br>
+        <div class="text-center my-4">
+            <h2>Flags SYN vs autres</h2>
+            <img src="flags.png" class="img-fluid rounded" alt="Flags SYN vs autres">
+        </div>
+        
+        <div class="text-center my-4">
+            <h2>Potentiel attaque DDoS TCP (SYN / ACK / RST)</h2>
+            <img src="ddos_tcp.png" class="img-fluid rounded" alt="DDoS TCP">
+        </div>
 
-        <h2>Distribution des longueurs de paquets DNS</h2>
-        <img src="dns_lengths.png" alt="DNS Lengths"><br>
+        <div class="text-center my-4">
+            <h2>Flags SYN par Source IP</h2>
+            <img src="flags_by_src.png" class="img-fluid rounded" alt="Flags SYN par Source">
+        </div>
 
-        <h2>Top 5 pics d'activité DNS</h2>
-        <img src="dns_time.png" alt="DNS Time"><br>
+        <div class="text-center my-4">
+            <h2>Répartition des paquets SYN par port (source la plus active)</h2>
+            <img src="syn_ports_top_src.png" class="img-fluid rounded" alt="SYN par port">
+        </div>
+
+        <div class="text-center my-4">
+            <h2>Évolution des Flags SYN dans le temps</h2>
+            <img src="flags_time_top_src.png" class="img-fluid rounded" alt="Flags SYN dans le temps">
+        </div>
+        
+        <div class="text-center my-4">
+            <h2>Répartition des longueurs de paquets (source la plus active)</h2>
+            <img src="lengths_top_src.png" class="img-fluid rounded" alt="Longueurs paquets source top">
+        </div>
+
+
+        <div class="text-center my-4">
+            <h2>Détail du scan de ports (source la plus active)</h2>
+            <img src="port_scan_top_src.png" class="img-fluid rounded" alt="Scan de ports source top">
+        </div>
+
+
+        <div class="text-center my-4">
+            <h2>Potentiel SQL Injection</h2>
+            <img src="sqli.png" class="img-fluid rounded" alt="SQL Injection">
+        </div>
+
+        <div class="text-center my-4">
+            <h2>Potentiel Brute-force</h2>
+            <img src="bruteforce.png" class="img-fluid rounded" alt="Brute-force">
+        </div>
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+
     </body>
     </html>
     """
