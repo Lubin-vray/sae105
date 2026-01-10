@@ -289,57 +289,111 @@ if liste_event:
         plt.ylabel("Nombre de paquets")
         plt.legend()
         plt.tight_layout()
-        plt.savefig("ddos_tcp.png")
+        plt.savefig("ddos_tcp_dest.png")
         plt.close()
     else:
         plt.figure(figsize=(6,5))
         plt.bar(["Aucune donnée"], [0], color="grey")
         plt.title("Potentiel DDoS TCP")
+        plt.savefig("ddos_tcp_dest.png")
+        plt.close()
+        # ============================
+    # 7. Détection DDoS TCP (SYN / ACK / RST) - TOP 5 SOURCE IP
+    # ============================
+
+    syn_by_src = Counter(
+        ev.get("Source IP")
+        for ev in liste_event
+        if ev.get("Flags") and "S" in ev["Flags"] and ev.get("Source IP")
+    )
+
+    ack_by_src = Counter(
+        ev.get("Source IP")
+        for ev in liste_event
+        if ev.get("Flags") == "." and ev.get("Source IP")
+    )
+
+    rst_by_src = Counter(
+        ev.get("Source IP")
+        for ev in liste_event
+        if ev.get("Flags") and "R" in ev["Flags"] and ev.get("Source IP")
+    )
+
+    # TOP 5 sources qui envoient le plus de SYN
+    top5_sources = syn_by_src.most_common(5)
+
+    if top5_sources:
+        src_ips = [ip for ip, _ in top5_sources]
+        syn_counts = [syn_by_src[ip] for ip in src_ips]
+        ack_counts = [ack_by_src.get(ip, 0) for ip in src_ips]
+        rst_counts = [rst_by_src.get(ip, 0) for ip in src_ips]
+
+        x = range(len(src_ips))
+        plt.figure(figsize=(10,5))
+
+        plt.bar(x, syn_counts, width=0.3, label="SYN", color="red")
+        plt.bar([i+0.3 for i in x], ack_counts, width=0.3, label="ACK", color="blue")
+        plt.bar([i+0.6 for i in x], rst_counts, width=0.3, label="RST", color="purple")
+
+        plt.xticks([i+0.3 for i in x], src_ips, rotation=45)
+        plt.title("Potentiel attaque DDoS TCP – Top 5 Sources (SYN / ACK / RST)")
+        plt.xlabel("Source IP")
+        plt.ylabel("Nombre de paquets")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig("ddos_tcp.png")
+        plt.close()
+    else:
+        plt.figure(figsize=(6,5))
+        plt.bar(["Aucune donnée"], [0], color="grey")
+        plt.title("Potentiel attaque DDoS TCP")
         plt.savefig("ddos_tcp.png")
         plt.close()
 
-        # 8bis. Détail du scan de ports pour la Source IP qui scanne le plus
+# ============================
+# 8bis. Nombre de ports de destination utilisés par IP source (TOP 10)
+# ============================
 
-    ports_by_src = defaultdict(set)
-    for ev in liste_event:
-        src = ev.get("Source IP")
-        dport = ev.get("Destination Port")
-        if src and dport:
-            ports_by_src[src].add(dport)
+ports_dest_by_src = defaultdict(set)
 
-    if ports_by_src:
-        # 1) Source IP qui a le plus de ports distincts
-        scan_scores = {src: len(ports) for src, ports in ports_by_src.items()}
-        top_src_scan, _ = sorted(scan_scores.items(),
-                                 key=lambda x: x[1],
-                                 reverse=True)[0]
+for ev in liste_event:
+    src = ev.get("Source IP")
+    dport = ev.get("Destination Port")
+    if src and dport:
+        ports_dest_by_src[src].add(dport)
 
-        # 2) Compter le nombre de paquets par port pour cette source
-        ports_count = Counter(
-            ev.get("Destination Port") for ev in liste_event
-            if ev.get("Source IP") == top_src_scan
-            and ev.get("Destination Port")
-        )
+# Nombre de ports de destination DISTINCTS par IP source
+ports_count_by_src = {
+    src: len(ports)
+    for src, ports in ports_dest_by_src.items()
+}
 
-        if ports_count:
-            ports = list(ports_count.keys())
-            counts = list(ports_count.values())
+# TOP 10 IP sources utilisant le plus de ports de destination
+top10_src_ports = sorted(
+    ports_count_by_src.items(),
+    key=lambda x: x[1],
+    reverse=True
+)[:10]
 
-            plt.figure(figsize=(9, 5))
-            plt.bar(ports, counts, color="orange")
-            plt.title(f"Détail du scan de ports pour {top_src_scan}")
-            plt.xlabel("Port de destination")
-            plt.ylabel("Nombre de paquets")
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            plt.savefig("port_scan_top_src.png")
-            plt.close()
-    else:
-        plt.figure(figsize=(6, 5))
-        plt.bar(["Aucun scan"], [0], color="grey")
-        plt.title("Aucun scan détecté")
-        plt.savefig("port_scan_top_src.png")
-        plt.close()
+if top10_src_ports:
+    src_ips, port_counts = zip(*top10_src_ports)
+
+    plt.figure(figsize=(10,5))
+    plt.bar(src_ips, port_counts, color="darkorange")
+    plt.title("Top 10 IP sources par nombre de ports de destination utilisés")
+    plt.xlabel("IP source")
+    plt.ylabel("Nombre de ports de destination distincts")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig("dst_ports_by_src.png")
+    plt.close()
+else:
+    plt.figure(figsize=(6,5))
+    plt.bar(["Aucune donnée"], [0], color="grey")
+    plt.title("Aucun port de destination détecté")
+    plt.savefig("dst_ports_by_src.png")
+    plt.close()
+
 
 
     # ============================
@@ -426,17 +480,7 @@ if liste_event:
 
         <h1 class="text-center mb-5">Analyse Tcpdump</h1>
 
-        <!-- Fonction utilitaire pour chaque section -->
-        <div class="text-center my-4">
-            <h2>Répartition des Protocoles</h2>
-            <img src="protocols.png" class="img-fluid rounded" alt="Protocol Pie Chart">
-        </div>
         
-
-        <div class="text-center my-4">
-            <h2>Distribution des longueurs de paquets</h2>
-            <img src="lengths.png" class="img-fluid rounded" alt="Packet Length Histogram">
-        </div>
 
         <div class="text-center my-4">
             <h2>Top 10 Ports Sources</h2>
@@ -451,6 +495,10 @@ if liste_event:
         <div class="text-center my-4">
             <h2>Potentiel attaque DDoS TCP (SYN / ACK / RST)</h2>
             <img src="ddos_tcp.png" class="img-fluid rounded" alt="DDoS TCP">
+        </div>
+        <div class="text-center my-4">
+            <h2>Potentiel attaque DDoS TCP (SYN / ACK / RST)</h2>
+            <img src="ddos_tcp_dest.png" class="img-fluid rounded" alt="DDoS TCP">
         </div>
 
         <div class="text-center my-4">
@@ -475,9 +523,10 @@ if liste_event:
 
 
         <div class="text-center my-4">
-            <h2>Détail du scan de ports (source la plus active)</h2>
-            <img src="port_scan_top_src.png" class="img-fluid rounded" alt="Scan de ports source top">
+            <h2>Top 10 adresses IP par nombre de ports utilisés</h2>
+            <img src="ports_used_by_ip.png" class="img-fluid rounded" alt="Ports utilisés par IP">
         </div>
+
 
 
         <div class="text-center my-4">

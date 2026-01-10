@@ -1,85 +1,23 @@
 
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <title>Analyse Tcpdump</title>
-        <link href="https://bootswatch.com/5/journal/bootstrap.min.css" rel="stylesheet">
-    </head>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Analyse Tcpdump</title>
+<link href="https://bootswatch.com/5/journal/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+<div class="container my-5">
 
-    <body>
+<h1 class="text-center mb-5">Analyse Tcpdump</h1>
 
-    <div class="container my-5">
+<img src="protocols.png" class="img-fluid my-4">
+<img src="flags.png" class="img-fluid my-4">
+<img src="ddos_src.png" class="img-fluid my-4">
+<img src="lengths.png" class="img-fluid my-4">
+<img src="ports_scan.png" class="img-fluid my-4">
+<img src="sqli.png" class="img-fluid my-4">
+<img src="bruteforce.png" class="img-fluid my-4">
 
-        <h1 class="text-center mb-5">Analyse Tcpdump</h1>
-
-        <!-- Fonction utilitaire pour chaque section -->
-        <div class="text-center my-4">
-            <h2>Répartition des Protocoles</h2>
-            <img src="protocols.png" class="img-fluid rounded" alt="Protocol Pie Chart">
-        </div>
-        
-
-        <div class="text-center my-4">
-            <h2>Distribution des longueurs de paquets</h2>
-            <img src="lengths.png" class="img-fluid rounded" alt="Packet Length Histogram">
-        </div>
-
-        <div class="text-center my-4">
-            <h2>Top 10 Ports Sources</h2>
-            <img src="ports.png" class="img-fluid rounded" alt="Top Ports Bar Chart">
-        </div>
-
-        <div class="text-center my-4">
-            <h2>Flags SYN vs autres</h2>
-            <img src="flags.png" class="img-fluid rounded" alt="Flags SYN vs autres">
-        </div>
-        
-        <div class="text-center my-4">
-            <h2>Potentiel attaque DDoS TCP (SYN / ACK / RST)</h2>
-            <img src="ddos_tcp.png" class="img-fluid rounded" alt="DDoS TCP">
-        </div>
-
-        <div class="text-center my-4">
-            <h2>Flags SYN par Source IP</h2>
-            <img src="flags_by_src.png" class="img-fluid rounded" alt="Flags SYN par Source">
-        </div>
-
-        <div class="text-center my-4">
-            <h2>Répartition des paquets SYN par port (source la plus active)</h2>
-            <img src="syn_ports_top_src.png" class="img-fluid rounded" alt="SYN par port">
-        </div>
-
-        <div class="text-center my-4">
-            <h2>Évolution des Flags SYN dans le temps</h2>
-            <img src="flags_time_top_src.png" class="img-fluid rounded" alt="Flags SYN dans le temps">
-        </div>
-        
-        <div class="text-center my-4">
-            <h2>Répartition des longueurs de paquets (source la plus active)</h2>
-            <img src="lengths_top_src.png" class="img-fluid rounded" alt="Longueurs paquets source top">
-        </div>
-
-
-        <div class="text-center my-4">
-            <h2>Détail du scan de ports (source la plus active)</h2>
-            <img src="port_scan_top_src.png" class="img-fluid rounded" alt="Scan de ports source top">
-        </div>
-
-
-        <div class="text-center my-4">
-            <h2>Potentiel SQL Injection</h2>
-            <img src="sqli.png" class="img-fluid rounded" alt="SQL Injection">
-        </div>
-
-        <div class="text-center my-4">
-            <h2>Potentiel Brute-force</h2>
-            <img src="bruteforce.png" class="img-fluid rounded" alt="Brute-force">
-        </div>
-
-    </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
-
-    </body>
-    </html>
-    
+</div>
+</body>
+</html>
