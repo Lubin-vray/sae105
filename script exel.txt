@@ -1,0 +1,249 @@
+function main(workbook: ExcelScript.Workbook) {
+
+    /* ===============================
+    1. FEUILLES
+    =============================== */
+
+    const dataSheet = workbook.getActiveWorksheet();
+
+    const oldSheet = workbook.getWorksheet("Graphiques");
+    if (oldSheet) oldSheet.delete();
+
+    const chartSheet = workbook.addWorksheet("Graphiques");
+
+    /* ===============================
+    2. LECTURE DES DONNÉES
+    =============================== */
+
+    const usedRange = dataSheet.getUsedRange();
+    if (!usedRange) throw new Error("Aucune donnée trouvée.");
+
+    const values = usedRange.getValues();
+    const headers = values[0] as string[];
+
+    function col(name: string): number {
+        const i = headers.indexOf(name);
+        if (i === -1) throw new Error(`Colonne manquante : ${name}`);
+        return i;
+    }
+
+    const cProtocol = col("Protocol");
+    const cFlags = col("Flags");
+    const cSrcIP = col("Source IP");
+    const cDstPort = col("Destination Port");
+    const cSQLi = col("SQLi");
+
+    /* ===============================
+    3. COMPTEURS
+    =============================== */
+
+    const protocolCount: Record<string, number> = {};
+    const flagCount: Record<string, number> = {};
+    const sqliCount: Record<string, number> = {};
+
+    const synBySrc: Record<string, number> = {};
+    const ackBySrc: Record<string, number> = {};
+    const rstBySrc: Record<string, number> = {};
+
+    const portsBySrc: Record<string, Set<string>> = {};
+
+    function inc(map: Record<string, number>, key: string) {
+        if (!key) return;
+        map[key] = (map[key] || 0) + 1;
+    }
+
+    /* ===============================
+    4. PARCOURS DES LIGNES
+    =============================== */
+
+    for (let i = 1; i < values.length; i++) {
+        const row = values[i];
+
+        const proto = String(row[cProtocol] ?? "");
+        const flags = String(row[cFlags] ?? "");
+        const srcIP = String(row[cSrcIP] ?? "");
+        const dstPort = String(row[cDstPort] ?? "");
+        const sqli = String(row[cSQLi] ?? "");
+
+        inc(protocolCount, proto);
+        inc(flagCount, flags);
+        inc(sqliCount, sqli);
+
+        if (srcIP) {
+            if (flags.includes("S")) inc(synBySrc, srcIP);
+            if (flags.includes(".")) inc(ackBySrc, srcIP);
+            if (flags.includes("R")) inc(rstBySrc, srcIP);
+        }
+
+        if (srcIP && dstPort) {
+            if (!portsBySrc[srcIP]) portsBySrc[srcIP] = new Set();
+            portsBySrc[srcIP].add(dstPort);
+        }
+    }
+
+    /* ===============================
+    5. ÉCRITURE DES TABLEAUX
+    =============================== */
+
+    let r = 0;
+
+    function writeTable(
+        headers: string[],
+        rows: (string | number)[][]
+    ): ExcelScript.Range {
+        if (rows.length === 0) rows = [["Aucune donnée", 0]];
+
+        // En‑têtes
+        chartSheet
+            .getRangeByIndexes(r, 0, 1, headers.length)
+            .setValues([headers]);
+        r++;
+
+        // Données
+        chartSheet
+            .getRangeByIndexes(r, 0, rows.length, headers.length)
+            .setValues(rows);
+
+        const range = chartSheet.getRangeByIndexes(
+            r - 1,
+            0,
+            rows.length + 1,
+            headers.length
+        );
+        r += rows.length + 2;
+        return range;
+    }
+
+    const protocolRange = writeTable(
+        ["Protocol", "Count"],
+        Object.entries(protocolCount)
+    );
+
+    const flagsRange = writeTable(
+        ["Flags", "Count"],
+        Object.entries(flagCount)
+    );
+
+    // === Regroupement SQLi en OUI / NON ===
+    let oui = 0;
+    let non = 0;
+
+    for (const [key, value] of Object.entries(sqliCount)) {
+        const k = key.trim().toUpperCase();
+        if (!k) continue;
+        if (k === "NO" || k === "NON" || k === "0") {
+            non += value;
+        } else {
+            oui += value;
+        }
+    }
+
+    const sqliRows: (string | number)[][] = [];
+    if (oui > 0) sqliRows.push(["OUI", oui]);
+    if (non > 0) sqliRows.push(["NON", non]);
+
+    // 1ère colonne = catégories (OUI / NON), 2ème = valeurs
+    const sqliRange = writeTable(
+        ["SQL Injection", ""],   // 2e en‑tête vide pour éviter "Valeur"
+        sqliRows
+    );
+
+    const ddosRange = writeTable(
+        ["Source IP", "SYN", "ACK", "RST"],
+        Object.keys(synBySrc).slice(0, 5).map(ip => [
+            ip,
+            synBySrc[ip] || 0,
+            ackBySrc[ip] || 0,
+            rstBySrc[ip] || 0
+        ])
+    );
+
+    const portScanRange = writeTable(
+        ["Source IP", "Ports distincts"],
+        Object.entries(portsBySrc).map(([ip, ports]) => [ip, ports.size])
+    );
+
+    const bruteRange = writeTable(
+        ["Source IP", "RST Count"],
+        Object.entries(rstBySrc)
+    );
+
+    /* ===============================
+    6. GRAPHIQUES
+    =============================== */
+
+    function addChart(
+        type: ExcelScript.ChartType,
+        range: ExcelScript.Range,
+        title: string,
+        top: string,
+        bottom: string
+    ): ExcelScript.Chart {
+        const chart = chartSheet.addChart(type, range);
+        chart.getTitle().setText(title);
+        chart.setPosition(chartSheet.getRange(top), chartSheet.getRange(bottom));
+        return chart;
+    }
+
+    addChart(
+        ExcelScript.ChartType.pie,
+        protocolRange,
+        "Répartition des Protocoles",
+        "F1",
+        "M15"
+    );
+
+    addChart(
+        ExcelScript.ChartType.pie,
+        flagsRange,
+        "Répartition des Flags TCP",
+        "F17",
+        "M31"
+    );
+
+    // Camembert SQLi
+    const sqliChart = addChart(
+        ExcelScript.ChartType.pie,
+        sqliRange,
+        "SQL Injection (OUI / NON)",
+        "F33",
+        "M47"
+    );
+
+    const sqliSeries = sqliChart.getSeries()[0];
+    sqliSeries.setName("SQLi");          // nom technique, non affiché
+    sqliSeries.setHasDataLabels(true);   // activer les labels
+
+    const sqliLabels = sqliSeries.getDataLabels();
+    sqliLabels.setShowCategoryName(true);   // OUI ou NON
+    sqliLabels.setShowPercentage(true);     // 100 %, 60 %, ...
+    sqliLabels.setShowSeriesName(false);    // ne pas afficher "SQLi" / en‑tête
+    sqliLabels.setShowValue(false);
+    sqliLabels.setShowLegendKey(false);
+
+    addChart(
+        ExcelScript.ChartType.columnClustered,
+        ddosRange,
+        "DDoS TCP – SYN / ACK / RST par IP source",
+        "F49",
+        "N67"
+    );
+
+    addChart(
+        ExcelScript.ChartType.columnClustered,
+        portScanRange,
+        "Détection Port Scan – Ports par IP source",
+        "F69",
+        "N87"
+    );
+
+    addChart(
+        ExcelScript.ChartType.columnClustered,
+        bruteRange,
+        "Brute-force – RST par IP source",
+        "F89",
+        "N107"
+    );
+
+    chartSheet.activate();
+}
