@@ -18,7 +18,7 @@ def detect_sql_injection(line):
     ]
     return any(re.search(p, line, re.IGNORECASE) for p in patterns)
 
-# ============================
+# ============================  
 # Parsing tcpdump
 # ============================
 
@@ -34,7 +34,7 @@ def parse_tcpdump_line(line):
     m = re.search(r"\s(\S+)\s>\s(\S+):", line)
     if not m:
         return None
-
+    
     src, dst = m.groups()
     if "." in src:
         ev["Source IP"], ev["Source Port"] = src.rsplit(".", 1)
@@ -211,15 +211,19 @@ rst_flows = Counter(
 )
 
 top_bf = rst_flows.most_common(5)
-if top_bf:
+if not top_bf:
+    flows = ["Aucune donnée"]
+    counts = [0]
+else:
     flows, counts = zip(*top_bf)
-    plt.figure(figsize=(10,5))
-    plt.bar(flows, counts)
-    plt.title("Potentiel Brute-force (RST)")
-    plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
-    plt.savefig("bruteforce.png")
-    plt.close()
+
+plt.figure(figsize=(10,5))
+plt.bar(flows, counts)
+plt.title("Potentiel Brute-force (RST)")
+plt.xticks(rotation=45, ha="right")
+plt.tight_layout()
+plt.savefig("bruteforce.png")
+plt.close()
 
 # ============================
 # HTML
