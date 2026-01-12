@@ -5,6 +5,7 @@ import re
 import matplotlib.pyplot as plt
 from collections import Counter, defaultdict
 import markdown
+from pyparsing import line
 
 
 # ============================
@@ -25,41 +26,53 @@ def detect_sql_injection(line):
 # Parsing tcpdump
 # ============================
 
-def parse_tcpdump_line(line):
-    line = line.split("0x")[0].strip()
+def parse_tcpdump_line(line: str):
+    line = line.rstrip("\n")
     ev = {}
 
-    # Timestamp (les 8 premiers caractères)
+    # 1) Protocole (sur la ligne brute, avant split "0x")
+    
+
+    # 2) On enlève la partie hexadécimale pour simplifier les regex
+    line = line.split("0x")[0].strip()
+    m_proto = re.search(r"\b(IP|ARP|ICMP|DNS)\b", line)
+    proto = m_proto.group(1) if m_proto else "Unknown"
+    ev["Protocol"] = proto
+    # 3) Timestamp = les 8 premiers caractères
     ev["Timestamp"] = line[:8]
 
-    # Protocole
-    proto = re.search(r"\s(IP|ARP|ICMP|DNS)\s", line)
-    ev["Protocol"] = proto.group(1) if proto else "Unknown"
+    # 4) IP/Ports source et destination
+    if proto == "IP":
+        m = re.search(r"\s(\S+)\s>\s(\S+):", line)
+        if not m:
+            return None
+        src, dst = m.groups()
 
-    # IP/Ports source et destination
-    m = re.search(r"\s(\S+)\s>\s(\S+):", line)
-    if not m:
-        return None
+        if "." in src:
+            ev["Source IP"], ev["Source Port"] = src.rsplit(".", 1)
+        else:
+            ev["Source IP"], ev["Source Port"] = src, ""
 
-    src, dst = m.groups()
-    if "." in src:
-        ev["Source IP"], ev["Source Port"] = src.rsplit(".", 1)
+        if "." in dst:
+            ev["Destination IP"], ev["Destination Port"] = dst.rsplit(".", 1)
+        else:
+            ev["Destination IP"], ev["Destination Port"] = dst, ""
     else:
-        ev["Source IP"], ev["Source Port"] = src, ""
-    if "." in dst:
-        ev["Destination IP"], ev["Destination Port"] = dst.rsplit(".", 1)
-    else:
-        ev["Destination IP"], ev["Destination Port"] = dst, ""
+        # Pour ARP, STP, etc. : pas de couple IP:port dans la ligne
+        ev["Source IP"] = ""
+        ev["Source Port"] = ""
+        ev["Destination IP"] = ""
+        ev["Destination Port"] = ""
 
-    # Flags TCP
+    # 5) Flags TCP (seulement présents sur certaines lignes IP)
     flags = re.search(r"Flags\s\[(.*?)\]", line)
     ev["Flags"] = flags.group(1) if flags else ""
 
-    # Longueur
+    # 6) Longueur du paquet
     length = re.search(r"length\s(\d+)", line)
     ev["Length"] = int(length.group(1)) if length else None
 
-    # SQLi potentielle
+    # 7) SQLi potentielle (sur la charge applicative)
     ev["SQLi"] = "YES" if detect_sql_injection(line) else "NO"
 
     return ev
@@ -101,7 +114,8 @@ if not chemin_fichier:
 events = []
 with open(chemin_fichier, encoding="utf-8", errors="ignore") as f:
     for line in f:
-        if line.strip() and not line.startswith("0x"):
+        # On saute les lignes hexadécimales (0x0000, 0x0010, etc.)
+        if line.strip() and not line.lstrip().startswith("0x"):
             ev = parse_tcpdump_line(line)
             if ev:
                 events.append(ev)
@@ -281,7 +295,7 @@ md = f"""
 with open("rapport.md", "w", encoding="utf-8") as f:
     f.write(md)
 
-# 2) Conversion Markdown -> HTML 
+# 2) Conversion Markdown -> HTML
 body = markdown.markdown(md, extensions=["tables"])
 
 html = f"""
