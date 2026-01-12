@@ -34,7 +34,7 @@ def parse_tcpdump_line(line: str):
     line = line.split("0x")[0].strip()
 
     # 2) Protocole 
-    m_proto = re.search(r"\b(IP|ARP|ICMP|DNS)\b", line)
+    m_proto = re.search(r"\b(IP|ARP|ICMP|DNS|STP)\b", line)
     proto = m_proto.group(1) if m_proto else "Unknown"
     ev["Protocol"] = proto
 
