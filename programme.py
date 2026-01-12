@@ -5,12 +5,13 @@ import re
 import matplotlib.pyplot as plt
 from collections import Counter, defaultdict
 import markdown
-from pyparsing import line
+
 
 
 # ============================
 # Détection SQL Injection
 # ============================
+
 
 def detect_sql_injection(line):
     patterns = [
@@ -22,65 +23,60 @@ def detect_sql_injection(line):
     return any(re.search(p, line, re.IGNORECASE) for p in patterns)
 
 
+
 # ============================
-# Récupération données ligne
+# Parsing d'une ligne tcpdump
 # ============================
+
 
 def parse_tcpdump_line(line: str):
-    line = line.rstrip("\n")
     ev = {}
 
-    # 1) On ignore les lignes vides ou hexadécimales
+    # Nettoyage
     line = line.split("0x")[0].strip()
+    if not line:
+        return None
 
-    # 2) Protocole 
-    m_proto = re.search(r"\b(IP|ARP|ICMP|DNS|STP)\b", line)
-    proto = m_proto.group(1) if m_proto else "Unknown"
-    ev["Protocol"] = proto
+    # Protocole
+    proto_match = re.search(r"\b(IP|ARP|ICMP|DNS|STP)\b", line)
+    ev["Protocol"] = proto_match.group(1) if proto_match else "Unknown"
 
-    # 3) Timestamp = les 8 premiers caractères
+    # Timestamp
     ev["Timestamp"] = line[:8]
 
-    # 4) IP/Ports source et destination
-    if proto == "IP":
+    # IP / Ports
+    if ev["Protocol"] == "IP":
         m = re.search(r"\s(\S+)\s>\s(\S+):", line)
         if not m:
             return None
+
         src, dst = m.groups()
 
-        if "." in src:
-            ev["Source IP"], ev["Source Port"] = src.rsplit(".", 1)
-        else:
-            ev["Source IP"], ev["Source Port"] = src, ""
-
-        if "." in dst:
-            ev["Destination IP"], ev["Destination Port"] = dst.rsplit(".", 1)
-        else:
-            ev["Destination IP"], ev["Destination Port"] = dst, ""
+        ev["Source IP"], ev["Source Port"] = src.rsplit(".", 1) if "." in src else (src, "")
+        ev["Destination IP"], ev["Destination Port"] = dst.rsplit(".", 1) if "." in dst else (dst, "")
     else:
-        # Pour ARP, STP, etc. : pas de couple IP:port dans la ligne
-        ev["Source IP"] = ""
-        ev["Source Port"] = ""
-        ev["Destination IP"] = ""
-        ev["Destination Port"] = ""
+        ev["Source IP"] = ev["Source Port"] = ""
+        ev["Destination IP"] = ev["Destination Port"] = ""
 
-    # 5) Flags TCP (seulement présents sur certaines lignes IP)
-    flags = re.search(r"Flags\s\[(.*?)\]", line)
-    ev["Flags"] = flags.group(1) if flags else ""
+    # Flags TCP (TOUS les types entre crochets)
+    flags_match = re.search(r"Flags\s*\[([^\]]+)\]", line)
+    ev["Flags"] = flags_match.group(1) if flags_match else ""
 
-    # 6) Longueur du paquet
-    length = re.search(r"length\s(\d+)", line)
-    ev["Length"] = int(length.group(1)) if length else None
+    # Longueur paquet
+    length_match = re.search(r"length\s(\d+)", line)
+    ev["Length"] = int(length_match.group(1)) if length_match else None
 
-    # 7) SQLi potentielle (sur la charge applicative)
+    # SQLi
     ev["SQLi"] = "YES" if detect_sql_injection(line) else "NO"
 
     return ev
 
 
+
 # ============================
 # Interface graphique
 # ============================
+
 
 def choisir_fichier():
     global chemin_fichier
@@ -107,26 +103,30 @@ if not chemin_fichier:
     exit()
 
 
+
 # ============================
-# Récupération des donné du TCP dump
+# Chargement des données
 # ============================
+
 
 events = []
 with open(chemin_fichier, encoding="utf-8", errors="ignore") as f:
     for line in f:
-        # On saute les lignes hexadécimales (0x0000, 0x0010, etc.)
         if line.strip() and not line.lstrip().startswith("0x"):
             ev = parse_tcpdump_line(line)
             if ev:
                 events.append(ev)
 
 if not events:
+    print("Aucune donnée exploitable")
     exit()
+
 
 
 # ============================
 # Export CSV
 # ============================
+
 
 with open("analyse_tcpdump.csv", "w", newline="", encoding="utf-8") as f:
     writer = csv.DictWriter(f, fieldnames=events[0].keys(), delimiter=";")
@@ -134,169 +134,173 @@ with open("analyse_tcpdump.csv", "w", newline="", encoding="utf-8") as f:
     writer.writerows(events)
 
 
+
 # ============================
-# GRAPHIQUES
+# OUTILS GRAPHIQUES
 # ============================
 
-# 1. Répartition des Protocoles
-protocols = Counter(ev["Protocol"] for ev in events)
-plt.figure(figsize=(6, 6))
-plt.pie(protocols.values(), labels=protocols.keys(), autopct="%1.1f%%")
-plt.title("Répartition des Protocoles")
-plt.savefig("protocols.png")
-plt.close()
 
-# 2. Répartition des Flags TCP (<5% = Autres)
-flags = Counter(ev["Flags"] for ev in events if ev["Flags"])
-total = sum(flags.values())
-filtered, others = {}, 0
-
-for flag, count in flags.items():
-    if total > 0 and count / total < 0.05:
-        others += count
-    else:
-        filtered[flag] = count
-if others:
-    filtered["Autres"] = others
-
-if filtered:
+def save_pie(data, title, filename):
+    if not data:
+        return False
     plt.figure(figsize=(6, 6))
-    plt.pie(filtered.values(), labels=filtered.keys(), autopct="%1.1f%%")
-    plt.title("Répartition des Flags TCP")
-    plt.savefig("flags.png")
+    plt.pie(data.values(), labels=data.keys(), autopct="%1.1f%%")
+    plt.title(title)
+    plt.savefig(filename)
     plt.close()
+    return True
 
-# 4. DDoS TCP – Sources
+
+def save_bar(labels, values, title, filename):
+    if not labels or not values:
+        return False
+    plt.figure(figsize=(9, 5))
+    plt.bar(labels, values)
+    plt.title(title)
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+    return True
+
+
+
+# ============================
+# ANALYSES
+# ============================
+
+
+protocols = Counter(ev["Protocol"] for ev in events)
+flags = Counter(ev["Flags"] for ev in events if ev["Flags"])
+sqli = Counter(ev["SQLi"] for ev in events)
+
 syn_s = Counter(ev["Source IP"] for ev in events if "S" in ev["Flags"])
-ack_s = Counter(ev["Source IP"] for ev in events if ev["Flags"] == ".")
+ack_s = Counter(ev["Source IP"] for ev in events if "." in ev["Flags"])
 rst_s = Counter(ev["Source IP"] for ev in events if "R" in ev["Flags"])
 
-top_src_ddos = syn_s.most_common(5)
-if top_src_ddos:
-    ips = [ip for ip, _ in top_src_ddos]
-    x = range(len(ips))
+ports_by_src = defaultdict(set)
+for ev in events:
+    if ev["Source IP"] and ev["Destination Port"]:
+        ports_by_src[ev["Source IP"]].add(ev["Destination Port"])
 
-    plt.figure(figsize=(9, 5))
-    plt.bar(x, [syn_s[ip] for ip in ips], width=0.3, label="SYN")
-    plt.bar([i + 0.3 for i in x], [ack_s.get(ip, 0) for ip in ips], width=0.3, label="ACK")
-    plt.bar([i + 0.6 for i in x], [rst_s.get(ip, 0) for ip in ips], width=0.3, label="RST")
-    plt.xticks([i + 0.3 for i in x], ips, rotation=45)
+
+
+# ============================
+# GÉNÉRATION DES GRAPHIQUES
+# ============================
+
+
+md_sections = {}
+
+md_sections["protocols"] = (
+    "![Protocoles](protocols.png)"
+    if save_pie(protocols, "Répartition des protocoles", "protocols.png")
+    else "*Aucune donnée disponible*"
+)
+
+md_sections["flags"] = (
+    "![Flags](flags.png)"
+    if save_pie(flags, "Répartition des flags TCP", "flags.png")
+    else "*Aucune donnée disponible*"
+)
+
+top_syn = syn_s.most_common(5)
+if top_syn:
+    ips = [ip for ip, _ in top_syn]
+    syn_vals = [syn_s[ip] for ip in ips]
+    ack_vals = [ack_s.get(ip, 0) for ip in ips]
+    rst_vals = [rst_s.get(ip, 0) for ip in ips]
+
+    plt.figure(figsize=(10, 5))
+    x = range(len(ips))
+    plt.bar(x, syn_vals, width=0.3, label="SYN")
+    plt.bar([i+0.3 for i in x], ack_vals, width=0.3, label="ACK")
+    plt.bar([i+0.6 for i in x], rst_vals, width=0.3, label="RST")
+    plt.xticks([i+0.3 for i in x], ips, rotation=45)
     plt.title("DDoS TCP – Sources")
     plt.legend()
     plt.tight_layout()
-    plt.savefig("ddos_src.png")
+    plt.savefig("ddos.png")
     plt.close()
-
-# 5. Longueurs paquets – source SYN la plus active
-if syn_s:
-    top_syn_src = syn_s.most_common(1)[0][0]
-    lengths = [
-        ev.get("Length") for ev in events
-        if ev.get("Source IP") == top_syn_src
-        and "S" in ev.get("Flags", "")
-        and ev.get("Length") is not None
-    ]
+    md_sections["ddos"] = "![DDoS](ddos.png)"
 else:
-    top_syn_src = "N/A"
-    lengths = []
+    md_sections["ddos"] = "*Aucune donnée disponible*"
 
-if lengths:
-    plt.figure(figsize=(8, 5))
-    plt.hist(lengths, bins=20, edgecolor="black")
-    plt.title(f"Longueur des paquets SYN – {top_syn_src}")
-    plt.xlabel("Octets")
-    plt.ylabel("Paquets")
-    plt.tight_layout()
-    plt.savefig("lengths.png")
-    plt.close()
 
-# 6. Ports destination distincts par IP source
-ports_by_src = defaultdict(set)
-for ev in events:
-    if ev.get("Source IP") and ev.get("Destination Port"):
-        ports_by_src[ev["Source IP"]].add(ev["Destination Port"])
-
-top_ports = sorted(
+ports_sorted = sorted(
     ((ip, len(p)) for ip, p in ports_by_src.items()),
     key=lambda x: x[1],
     reverse=True
 )[:10]
 
-if top_ports:
-    ips, counts = zip(*top_ports)
-    plt.figure(figsize=(10, 5))
-    plt.bar(ips, counts)
-    plt.title("Ports destination distincts par IP source")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig("ports_scan.png")
-    plt.close()
-
-# 7. SQL Injection
-sqli = Counter(ev["SQLi"] for ev in events)
-plt.figure(figsize=(6, 6))
-plt.pie(sqli.values(), labels=sqli.keys(), autopct="%1.1f%%")
-plt.title("Potentiel SQL Injection")
-plt.savefig("sqli.png")
-plt.close()
-
-# 8. Brute-force (RST)
-rst_flows = Counter(
-    f'{ev["Source IP"]}->{ev["Destination IP"]}:{ev["Destination Port"]}'
-    for ev in events if "R" in ev["Flags"]
+md_sections["ports"] = (
+    "![Ports](ports.png)"
+    if save_bar(
+        [ip for ip, _ in ports_sorted],
+        [c for _, c in ports_sorted],
+        "Ports destination distincts",
+        "ports.png"
+    )
+    else "*Aucune donnée disponible*"
 )
 
-top_bf = rst_flows.most_common(5)
-if not top_bf:
-    flows = ["Aucune donnée"]
-    counts = [0]
-else:
-    flows, counts = zip(*top_bf)
+md_sections["sqli"] = (
+    "![SQLi](sqli.png)"
+    if save_pie(sqli, "Potentiel SQL Injection", "sqli.png")
+    else "*Aucune donnée disponible*"
+)
 
-plt.figure(figsize=(10, 5))
-plt.bar(flows, counts)
-plt.title("Potentiel Brute-force (RST)")
-plt.xticks(rotation=45, ha="right")
-plt.tight_layout()
-plt.savefig("bruteforce.png")
-plt.close()
+# ===== Nouveau : graphique brute-force (RST par IP source) =====
+
+top_rst = rst_s.most_common(10)
+md_sections["bruteforce"] = (
+    "![Brute-force](bruteforce.png)"
+    if save_bar(
+        [ip for ip, _ in top_rst],
+        [c for _, c in top_rst],
+        "Potentiel brute-force (RST par IP source)",
+        "bruteforce.png"
+    )
+    else "*Aucune donnée disponible*"
+)
+
 
 
 # ============================
-# Rapport Markdown -> HTML
+# RAPPORT MARKDOWN / HTML
 # ============================
+
 
 md = f"""
 # Analyse Tcpdump
 
+
 ## Répartition des protocoles
-![Répartition des protocoles](protocols.png)
+{md_sections["protocols"]}
+
 
 ## Répartition des flags TCP
-![Répartition des flags TCP](flags.png)
+{md_sections["flags"]}
+
 
 ## DDoS TCP – Sources
-![DDoS TCP – Sources](ddos_src.png)
+{md_sections["ddos"]}
 
-## Longueur des paquets SYN – {top_syn_src}
-![Longueur des paquets SYN](lengths.png)
 
 ## Ports destination distincts par IP source
-![Ports destination](ports_scan.png)
+{md_sections["ports"]}
+
 
 ## Potentiel SQL Injection
-![Potentiel SQL Injection](sqli.png)
+{md_sections["sqli"]}
 
-## Potentiel Brute-force (RST)
-![Potentiel Brute-force](bruteforce.png)
+
+## Potentiel brute-force (RST par IP source)
+{md_sections["bruteforce"]}
 """
 
-# 1) Sauvegarde du Markdown dans un fichier .md
 with open("rapport.md", "w", encoding="utf-8") as f:
     f.write(md)
-
-# 2) Conversion Markdown -> HTML
-body = markdown.markdown(md, extensions=["tables"])
 
 html = f"""
 <html>
@@ -307,7 +311,7 @@ html = f"""
 </head>
 <body>
 <div class="container my-5">
-{body}
+{markdown.markdown(md)}
 </div>
 </body>
 </html>
@@ -316,4 +320,4 @@ html = f"""
 with open("rapport.html", "w", encoding="utf-8") as f:
     f.write(html)
 
-print("Analyse terminée : CSV, graphiques, rapport.md et rapport.html générés")
+print("Analyse terminée : CSV, graphiques valides et rapport générés")
