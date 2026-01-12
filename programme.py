@@ -23,21 +23,21 @@ def detect_sql_injection(line):
 
 
 # ============================
-# Parsing tcpdump
+# Récupération données ligne
 # ============================
 
 def parse_tcpdump_line(line: str):
     line = line.rstrip("\n")
     ev = {}
 
-    # 1) Protocole (sur la ligne brute, avant split "0x")
-    
-
-    # 2) On enlève la partie hexadécimale pour simplifier les regex
+    # 1) On ignore les lignes vides ou hexadécimales
     line = line.split("0x")[0].strip()
+
+    # 2) Protocole 
     m_proto = re.search(r"\b(IP|ARP|ICMP|DNS)\b", line)
     proto = m_proto.group(1) if m_proto else "Unknown"
     ev["Protocol"] = proto
+
     # 3) Timestamp = les 8 premiers caractères
     ev["Timestamp"] = line[:8]
 
@@ -108,7 +108,7 @@ if not chemin_fichier:
 
 
 # ============================
-# Chargement
+# Récupération des donné du TCP dump
 # ============================
 
 events = []
